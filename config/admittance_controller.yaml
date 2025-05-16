@@ -1,0 +1,27 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 500  # Hz
+
+    ur5e_admittance_controller:
+      type: ur5e_admittance_controller/AdmittanceController
+
+ur5e_admittance_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    
+    # Admittance parameters
+    mass_matrix: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]  # Diagonal of virtual mass matrix
+    damping_matrix: [100.0, 100.0, 100.0, 50.0, 50.0, 50.0]  # Diagonal of damping matrix
+    
+    force_torque_sensor: "wrist_3_joint"
+    force_dead_zone: [2.0, 2.0, 2.0]  # Force threshold in N
+    torque_dead_zone: [0.5, 0.5, 0.5]  # Torque threshold in Nm
+    
+    publish_rate: 100.0  # Controller state publish rate
+    action_monitor_rate: 20.0  # Action status publish rate
