@@ -17,13 +17,13 @@ find_package(ur_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 
 
-# Install Python scripts
 install(PROGRAMS
   scripts/example_move.py
+  scripts/cartesian_velocity_controller.py
+  scripts/admittance.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install launch files
 install(DIRECTORY
   launch
   config
