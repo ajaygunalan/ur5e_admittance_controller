@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionClient
-from rclpy.callback_groups import ReentrantCallbackGroup
-import numpy as np
-import time
-import PyKDL
-from urdf_parser_py.urdf import URDF
-from kdl_parser_py.urdf import treeFromUrdfModel
-import os
-from ament_index_python.packages import get_package_share_directory
-
-from builtin_interfaces.msg import Duration
-from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Twist, PoseStamped
-from sensor_msgs.msg import JointState
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from control_msgs.action import FollowJointTrajectory
-from control_msgs.msg import JointTolerance
 
 
 class CartesianVelocityController(Node):
@@ -144,61 +125,58 @@ class CartesianVelocityController(Node):
         self.get_logger().info("Cartesian velocity controller initialized and ready!")
         self.get_logger().info("Listening for commands on topic: /command_cart_vel")
     
+
     def init_kinematics(self):
         """Initialize KDL kinematics from URDF"""
-        # First try to get robot description directly from parameter
-        robot_description = None
+        # Make sure we have the robot_description parameter directly available
+        self.declare_parameter('robot_description', '')
+        robot_description = self.get_parameter('robot_description').get_parameter_value().string_value
         
-        try:
-            robot_description = self.get_parameter(self.robot_description_param).value
-            self.get_logger().info("Got robot description from parameter")
-        except Exception:
-            self.get_logger().info("Robot description not found as local parameter")
-            
-        # If not available, try to get it from parameter service
+        # If not available directly, try the robot_description_param we specified
+        if not robot_description:
+            try:
+                robot_description = self.get_parameter(self.robot_description_param).value
+                self.get_logger().info(f"Got robot description from parameter '{self.robot_description_param}'")
+            except Exception:
+                self.get_logger().info(f"Parameter '{self.robot_description_param}' not found")
+        
+        # If still not available, try to get it from parameter service
         if not robot_description:
             try:
                 from rcl_interfaces.srv import GetParameters
-                self.get_logger().info("Trying to get robot description from parameter service")
+                self.get_logger().info("Trying to get robot description from robot_state_publisher")
                 
                 cli = self.create_client(GetParameters, '/robot_state_publisher/get_parameters')
                 if not cli.wait_for_service(timeout_sec=1.0):
-                    self.get_logger().warn("Parameter service not available, trying alternative method")
+                    self.get_logger().warn("Parameter service not available")
                 else:
                     req = GetParameters.Request()
                     req.names = [self.robot_description_param]
                     future = cli.call_async(req)
-                    rclpy.spin_until_future_complete(self, future)
+                    rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
                     robot_description = future.result().values[0].string_value
                     self.get_logger().info("Got robot description from parameter service")
             except Exception as e:
                 self.get_logger().warn(f"Failed to get robot description from service: {e}")
-                
-        # If still not available, try to load from file
-        if not robot_description:
-            try:
-                self.get_logger().info("Trying to load robot description from file")
-                # Try to find the URDF file
-                urdf_path = os.path.join(
-                    get_package_share_directory('ur_description'),
-                    'urdf',
-                    'ur5e.urdf.xacro'  # Assuming ur5e is the default robot
-                )
-                
-                if os.path.exists(urdf_path):
-                    # This is just an alternative approach - in practice you'd need to process the xacro
-                    self.get_logger().error(f"Found URDF at {urdf_path}, but xacro processing required")
-                    self.get_logger().error("Please ensure robot_description parameter is available")
-                    raise RuntimeError("Cannot load robot description from file directly")
-            except Exception as e:
-                self.get_logger().error(f"Failed to load robot description from file: {e}")
         
+        # If we still don't have it, we can't continue
         if not robot_description:
-            raise RuntimeError("Could not obtain robot description")
+            raise RuntimeError(
+                "Could not obtain robot_description. Make sure it's set in your launch file.\n"
+                "Example: 'ros2 launch ur_simulation_gz ur_sim_control.launch.py'"
+            )
         
         # Parse URDF and create KDL tree
         urdf_model = URDF.from_xml_string(robot_description)
-        kdl_tree = treeFromUrdfModel(urdf_model)
+        
+        # Build the KDL tree with proper error checking
+        ok, kdl_tree = treeFromUrdfModel(urdf_model)
+        if not ok:
+            raise RuntimeError("Failed to construct KDL tree from URDF")
+        
+        # Check if the specified links exist in the tree
+        if not kdl_tree.getChain(self.base_link, self.end_link).getNrOfSegments():
+            raise RuntimeError(f"Could not find chain from '{self.base_link}' to '{self.end_link}' in the robot model")
         
         # Extract the chain from base to end-effector
         self.kdl_chain = kdl_tree.getChain(self.base_link, self.end_link)
@@ -208,7 +186,8 @@ class CartesianVelocityController(Node):
         self.fk_vel_solver = PyKDL.ChainFkSolverVel_recursive(self.kdl_chain)
         self.ik_vel_solver = PyKDL.ChainIkSolverVel_pinv(self.kdl_chain)
         
-        self.get_logger().info(f"Initialized kinematics with {self.kdl_chain.getNrOfJoints()} joints")
+        self.get_logger().info(f"Successfully initialized kinematics with {self.kdl_chain.getNrOfJoints()} joints and {self.kdl_chain.getNrOfSegments()} segments")
+
     
     def joint_state_callback(self, msg):
         """Update current joint state from robot"""
